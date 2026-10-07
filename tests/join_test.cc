@@ -651,6 +651,57 @@ struct PlanGuard {
   }
 };
 
+// Model a source backed by another plan: stopping it waits for its completion
+// callback to return. Bound the wait so a reentrant stop fails instead of hanging.
+class CompletionWaitingSource : public TestSource {
+ public:
+  CompletionWaitingSource(ac::ExecPlan* plan, std::shared_ptr<arrow::Schema> schema)
+      : TestSource(plan, TestSourceOptions(std::move(schema), {})) {}
+
+  Status StartProducing() override {
+    plan()->query_context()->ScheduleTask(
+        [this] {
+          auto status = output_->InputFinished(this, 0);
+          completion_returned_.MarkFinished();
+          return status;
+        },
+        "CompletionWaitingSource::Finish");
+    return Status::OK();
+  }
+
+  Status StopProducingImpl() override {
+    stopped_.store(true);
+    return completion_returned_.Wait(2.0)
+               ? Status::OK()
+               : Status::Invalid("Upstream stop waited on its own completion callback");
+  }
+
+  bool stopped() const { return stopped_.load(); }
+
+ private:
+  arrow::Future<> completion_returned_ = arrow::Future<>::Make();
+  std::atomic<bool> stopped_{false};
+};
+
+Status TestAsofCompletionStopsUpstream() {
+  auto schema = arrow::schema({arrow::field("on", arrow::int64())});
+  ARROW_ASSIGN_OR_RAISE(auto plan, ac::ExecPlan::Make());
+  auto* left = plan->EmplaceNode<CompletionWaitingSource>(plan.get(), schema);
+  ARROW_ASSIGN_OR_RAISE(auto right, Source(schema, {}).AddToPlan(plan.get()));
+  ARROW_ASSIGN_OR_RAISE(auto join, ac::MakeExecNode("acier_asofjoin", plan.get(),
+                                                    {left, right}, AsofOptions()));
+  auto consumer = std::make_shared<PausingConsumer>();
+  ARROW_RETURN_NOT_OK(ac::MakeExecNode("consuming_sink", plan.get(), {join},
+                                       ac::ConsumingSinkNodeOptions(consumer)));
+  ARROW_RETURN_NOT_OK(plan->Validate());
+  PlanGuard guard{plan, [] {}};
+  plan->StartProducing();
+  REQUIRE(plan->finished().Wait(5.0), "Completion did not finish the plan");
+  ARROW_RETURN_NOT_OK(plan->finished().status());
+  REQUIRE(left->stopped(), "Completion did not stop the upstream source");
+  return Status::OK();
+}
+
 Status TestPauseResumeTailAndStop() {
   auto schema = arrow::schema({arrow::field("on", arrow::int64())});
   for (bool asof : {false, true}) {
@@ -832,6 +883,8 @@ Status RunTests() {
       ARROW_RETURN_NOT_OK(test.second(threaded));
     }
   }
+  std::cout << "asof completion stops upstream without reentry" << std::endl;
+  ARROW_RETURN_NOT_OK(TestAsofCompletionStopsUpstream());
   std::cout << "pause, resume, tail flush and stop" << std::endl;
   ARROW_RETURN_NOT_OK(TestPauseResumeTailAndStop());
   std::cout << "factory coexistence and registration errors" << std::endl;

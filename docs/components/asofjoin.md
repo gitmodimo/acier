@@ -18,7 +18,10 @@ Upstream reference: [acero/asof_join_node.cc](https://github.com/apache/arrow/bl
   left batch into currently joinable fragments.
 - Acier uses plan-scheduled work and implements downstream pause/resume. Upstream
   uses a dedicated processing thread when threading is enabled and has empty
-  downstream pause/resume handlers.
+  downstream pause/resume handlers. When left input completion finds no remaining
+  work, Acier schedules output completion and upstream stopping separately from the
+  input callback. Upstream also dispatches completion away from the input callback
+  in threaded execution.
 - Null left times never match; null right times are skipped. Acier checks ordering
   and handles signed time limits without overflow. Explicit ordering's null policy
   is respected; implicitly ordered inputs can contain null times anywhere.
@@ -37,7 +40,8 @@ Upstream reference: [acero/asof_join_node.cc](https://github.com/apache/arrow/bl
   remaining output can drain without resume. Each input batch is limited to
   `INT32_MAX` rows; there is no smaller output batch cap.
 - Tests cover matching, ties, nulls, nested payloads, ordering, schemas, batch
-  indices, pause/stop/error paths and serial/threaded plans. They do not establish
+  indices, pause/stop/error paths, upstream stop waiting for a completion callback,
+  and serial/threaded plans. They do not establish
   a performance advantage over upstream.
 
 ## Implementation and coverage
