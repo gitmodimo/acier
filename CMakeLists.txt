@@ -93,4 +93,3 @@ install(FILES
   "${CMAKE_CURRENT_BINARY_DIR}/AcierConfigVersion.cmake"
   DESTINATION "${acier_cmake_dir}")
 install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
-install(FILES LICENSE.txt NOTICE.txt DESTINATION "${CMAKE_INSTALL_DATADIR}/acier")
