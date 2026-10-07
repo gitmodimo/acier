@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: Apache-2.0
+name: C++ tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cpp-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Release (shared and static)
+            mode: release
+            cc: gcc
+            cxx: g++
+          - name: ASan and UBSan (shared)
+            mode: sanitizers
+            cc: clang-18
+            cxx: clang++-18
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out Acier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends cmake ninja-build g++ clang-18
+
+      - name: Read dependency pin and toolchain identity
+        id: dependency
+        run: |
+          source ci/arrow.env
+          printf 'revision=%s\n' "$ARROW_REVISION" >> "$GITHUB_OUTPUT"
+          identity=$(
+            { "$CXX" --version; cmake --version; ninja --version; printf '%s\n' "$ImageVersion"; } |
+              sha256sum | cut -d ' ' -f 1
+          )
+          printf 'toolchain=%s\n' "$identity" >> "$GITHUB_OUTPUT"
+
+      - name: Cache installed Arrow
+        id: arrow-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build-ci/arrow-install
+          key: arrow-${{ runner.os }}-${{ runner.arch }}-${{ matrix.mode }}-${{ steps.dependency.outputs.toolchain }}-${{ hashFiles('ci/arrow.env', 'ci/build-arrow.sh') }}
+
+      - name: Check out pinned upstream Arrow
+        if: steps.arrow-cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: apache/arrow
+          ref: ${{ steps.dependency.outputs.revision }}
+          path: build-ci/arrow-source
+          persist-credentials: false
+
+      - name: Build and install Arrow
+        if: steps.arrow-cache.outputs.cache-hit != 'true'
+        run: bash ci/build-arrow.sh build-ci/arrow-source build-ci/arrow-build build-ci/arrow-install '${{ matrix.mode }}'
+
+      - name: Verify cached dependency revision
+        run: |
+          source ci/arrow.env
+          test "$(cat build-ci/arrow-install/acier-arrow-revision)" = "$ARROW_REVISION"
+
+      - name: Build, test, and consume installed Acier
+        run: bash ci/test.sh build-ci/arrow-install build-ci/acier '${{ matrix.mode }}'

@@ -1,0 +1,15 @@
+Acier
+Copyright 2026 Acier contributors
+
+Acier is licensed under the Apache License, Version 2.0.
+
+Acier includes modified source derived from Apache Arrow:
+Apache Arrow
+Copyright 2016-2026 The Apache Software Foundation
+https://arrow.apache.org/
+
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).
+
+The Arrow libraries are distributed separately under their own LICENSE and NOTICE files.
+Acier is an independent project and is not an Apache Software Foundation project.
